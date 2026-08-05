@@ -6,6 +6,7 @@ import {
   deriveCenteredContentHorizontalPadding,
   deriveFileInspectorPaneLayout,
   deriveLayout,
+  derivePendingCardsOverlayMaxHeight,
   deriveStableFormSheetDetent,
   deriveWorkspacePaneLayout,
   SPLIT_LAYOUT_MIN_HEIGHT,
@@ -328,6 +329,47 @@ describe("deriveWorkspacePaneLayout", () => {
       auxiliaryPaneVisible: false,
       auxiliaryPaneWidth: null,
     });
+  });
+});
+
+describe("derivePendingCardsOverlayMaxHeight", () => {
+  // iPhone 17 Pro portrait: 932pt tall, 96pt large-title-less header, 60pt
+  // collapsed composer chrome plus a 34pt home-indicator inset.
+  const iphone = {
+    windowHeight: 932,
+    navigationHeaderHeight: 96,
+    composerHeight: 94,
+  } as const;
+
+  it("leaves the cards the band between the header and the composer", () => {
+    expect(derivePendingCardsOverlayMaxHeight({ ...iphone, keyboardHeight: 0 })).toBe(824);
+  });
+
+  it("gives the band back to the keyboard while a custom answer is typed", () => {
+    expect(derivePendingCardsOverlayMaxHeight({ ...iphone, keyboardHeight: 336 })).toBe(488);
+  });
+
+  it("collapses the cards rather than clipping the composer in a short viewport", () => {
+    // iPhone landscape with the keyboard up: nothing is left above the composer.
+    expect(
+      derivePendingCardsOverlayMaxHeight({
+        windowHeight: 430,
+        navigationHeaderHeight: 44,
+        keyboardHeight: 336,
+        composerHeight: 72,
+      }),
+    ).toBe(72);
+  });
+
+  it("falls back to the composer height when the window is not measured yet", () => {
+    expect(
+      derivePendingCardsOverlayMaxHeight({
+        windowHeight: 0,
+        navigationHeaderHeight: 96,
+        keyboardHeight: 0,
+        composerHeight: 94,
+      }),
+    ).toBe(94);
   });
 });
 

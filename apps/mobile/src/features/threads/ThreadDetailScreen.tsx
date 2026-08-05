@@ -33,14 +33,22 @@ import {
   View,
   type GestureResponderEvent,
 } from "react-native";
-import { KeyboardController, KeyboardStickyView } from "react-native-keyboard-controller";
+import {
+  KeyboardController,
+  KeyboardStickyView,
+  useKeyboardState,
+} from "react-native-keyboard-controller";
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
-import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
+import {
+  CHAT_CONTENT_MAX_WIDTH,
+  derivePendingCardsOverlayMaxHeight,
+  type LayoutVariant,
+} from "../../lib/layout";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import type {
   PendingApproval,
@@ -218,22 +226,27 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const selectedThreadFeed = props.selectedThreadFeed;
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
   const composerOverlapHeight = composerChrome + composerBottomInset;
-  const windowDimensions = useWindowDimensions();
-  // The pending approval/user-input cards live in the bottom-anchored composer
-  // overlay, so a card with many questions grows upward past the navigation
-  // header. Cap the card stack to the space between the header and the
-  // composer and let it scroll instead. Read the context directly
-  // (useHeaderHeight throws outside a header-providing screen) and fall back
-  // to the standard iOS bar height.
-  const navigationHeaderHeight = useContext(HeaderHeightContext);
-  const pendingCardsMaxHeight = Math.max(
-    120,
-    windowDimensions.height -
-      (navigationHeaderHeight || insets.top + 44) -
-      composerOverlapHeight -
-      12,
-  );
   const estimatedOverlayHeight = composerOverlapHeight;
+  // Pending cards live in the bottom-anchored composer overlay, so a request
+  // with several questions grows the overlay upward until its first questions
+  // sit under the navigation header, out of reach. Cap the overlay at the band
+  // between the header and the top of the keyboard — KeyboardStickyView lifts
+  // the overlay by the keyboard height — and let the cards shrink and scroll
+  // inside it. The composer is not shrinkable, so it keeps its natural height
+  // whatever the draft contains and only the cards give way. Header height
+  // comes from the context directly (useHeaderHeight throws outside a
+  // header-providing screen) with the fallback ThreadFeed already uses.
+  const windowHeight = useWindowDimensions().height;
+  const keyboardHeight = useKeyboardState((state) => state.height);
+  const navigationHeaderHeight = useContext(HeaderHeightContext);
+  const hasPendingCards =
+    props.activePendingApproval !== null || props.activePendingUserInput !== null;
+  const pendingCardsOverlayMaxHeight = derivePendingCardsOverlayMaxHeight({
+    windowHeight,
+    navigationHeaderHeight: navigationHeaderHeight || insets.top + 44,
+    keyboardHeight,
+    composerHeight: composerOverlapHeight,
+  });
   // The overlay's measured height includes the home-indicator inset (the
   // composer pads it), but contentInsetAdjustmentBehavior="automatic" makes
   // UIKit add the safe-area bottom to the content inset AGAIN — leaving a
@@ -417,16 +430,21 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           {/* No paddingTop here: the overlay's measured height becomes the
               list's bottom inset, so any padding above the pill/composer
               pushes the resting content floor up by the same amount. */}
-          <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
-            <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
-              {props.activePendingApproval || props.activePendingUserInput ? (
+          <View
+            ref={composerOverlayRef}
+            onLayout={onComposerLayout}
+            className="w-full"
+            style={hasPendingCards ? { maxHeight: pendingCardsOverlayMaxHeight } : undefined}
+          >
+            <View className="w-full shrink self-center" style={{ maxWidth: contentMaxWidth }}>
+              {hasPendingCards ? (
                 <Animated.View
-                  className="shrink-0 px-4 pb-3"
-                  style={{ maxHeight: pendingCardsMaxHeight }}
+                  className="shrink px-4 pb-3"
                   entering={FadeInDown.duration(220)}
                   exiting={FadeOut.duration(140)}
                 >
                   <ScrollView
+                    className="shrink"
                     contentContainerClassName="gap-3"
                     showsVerticalScrollIndicator={false}
                     keyboardShouldPersistTaps="handled"

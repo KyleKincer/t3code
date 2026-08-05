@@ -28,6 +28,8 @@ const STABLE_FORM_SHEET_MAX_HEIGHT = 720;
 const STABLE_FORM_SHEET_VERTICAL_MARGIN = 64;
 const STABLE_FORM_SHEET_MIN_DETENT = 0.62;
 const STABLE_FORM_SHEET_MAX_DETENT = 0.92;
+/** Breathing room kept between the navigation header and the pending cards. */
+const PENDING_CARDS_HEADER_GAP = 12;
 
 export type LayoutVariant = "compact" | "split";
 
@@ -236,6 +238,43 @@ export function deriveCenteredContentHorizontalPadding(input: {
   }
 
   return minimumPadding + Math.max(0, (viewportWidth - input.maxContentWidth) / 2);
+}
+
+/**
+ * Bound the bottom-anchored composer overlay to the band between the navigation
+ * header and the top of the keyboard.
+ *
+ * Pending approval/user-input cards sit above the composer inside that overlay,
+ * so a request carrying several questions grows it upward until its first
+ * questions are hidden behind the header. The composer itself is never squeezed:
+ * where the band cannot hold both, the cards collapse and the composer keeps the
+ * height it measured.
+ */
+export function derivePendingCardsOverlayMaxHeight(input: {
+  readonly windowHeight: number;
+  readonly navigationHeaderHeight: number;
+  readonly keyboardHeight: number;
+  readonly composerHeight: number;
+}): number {
+  const composerHeight = Number.isFinite(input.composerHeight)
+    ? Math.max(0, input.composerHeight)
+    : 0;
+
+  if (!Number.isFinite(input.windowHeight) || input.windowHeight <= 0) {
+    return composerHeight;
+  }
+
+  const navigationHeaderHeight = Number.isFinite(input.navigationHeaderHeight)
+    ? Math.max(0, input.navigationHeaderHeight)
+    : 0;
+  const keyboardHeight = Number.isFinite(input.keyboardHeight)
+    ? Math.max(0, input.keyboardHeight)
+    : 0;
+
+  return Math.max(
+    composerHeight,
+    input.windowHeight - navigationHeaderHeight - keyboardHeight - PENDING_CARDS_HEADER_GAP,
+  );
 }
 
 export function deriveStableFormSheetDetent(containerHeight: number): number {
