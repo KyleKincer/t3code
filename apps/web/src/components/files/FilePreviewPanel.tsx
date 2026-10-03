@@ -1122,7 +1122,12 @@ export default function FilePreviewPanel({
               environmentId={environmentId}
               keybindings={keybindings}
               availableEditors={availableEditors}
-              openInCwd={absolutePath}
+              openInPath={
+                remoteOpenState.mode === "remote-links" && file.data === null && file.error === null
+                  ? null
+                  : absolutePath
+              }
+              pathKind={file.isNotFile ? "folder" : "file"}
               compact
             />
           ) : null}
