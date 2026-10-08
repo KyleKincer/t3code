@@ -169,6 +169,25 @@ describe("buildRemoteOpenUrl", () => {
     },
   );
 
+  it.each(["vscode", "cursor", "vscode-insiders", "vscodium"] as const)(
+    "keeps explicit folders out of %s's file and workspace handlers",
+    (editor) => {
+      for (const [absolutePath, encodedFolder] of [
+        ["/tmp/build:12", "/tmp/build%3A12/"],
+        ["/tmp/.code-workspace", "/tmp/.code-workspace/"],
+        ["/tmp/project.CODE-WORKSPACE", "/tmp/project.CODE-WORKSPACE/"],
+        ["/tmp/project.code-workspace", "/tmp/"],
+        ["/tmp/project.code-workspace/./", "/tmp/"],
+        ["/outer.code-workspace/inner.code-workspace", "/"],
+        ["C:\\tmp\\build:12", "/C%3A/tmp/build%3A12/"],
+      ] as const) {
+        const url = buildRemoteOpenUrl({ editor, host: "sol", absolutePath, pathKind: "folder" });
+        expect(url).toBe(`${editor}://vscode-remote/ssh-remote+sol${encodedFolder}`);
+        expect(new URL(url!).href).toBe(url);
+      }
+    },
+  );
+
   it("keeps colon filenames unchanged for Zed", () => {
     expect(
       buildRemoteOpenUrl({
@@ -188,7 +207,7 @@ describe("buildRemoteOpenUrl", () => {
         absolutePath: "/home/theo/code/my repo",
         pathKind: "folder",
       }),
-    ).toBe("vscode://vscode-remote/ssh-remote+sol.tail1234.ts.net/home/theo/code/my%20repo");
+    ).toBe("vscode://vscode-remote/ssh-remote+sol.tail1234.ts.net/home/theo/code/my%20repo/");
   });
 
   it.each(["cursor", "vscode-insiders", "vscodium"] as const)("uses %s's scheme", (editor) => {
@@ -197,7 +216,7 @@ describe("buildRemoteOpenUrl", () => {
     ).toBe(`${editor}://vscode-remote/ssh-remote+sol/tmp/x:1`);
     expect(
       buildRemoteOpenUrl({ editor, host: "sol", absolutePath: "/tmp/x", pathKind: "folder" }),
-    ).toBe(`${editor}://vscode-remote/ssh-remote+sol/tmp/x`);
+    ).toBe(`${editor}://vscode-remote/ssh-remote+sol/tmp/x/`);
   });
 
   it("keeps folders with file extensions as folders", () => {
@@ -208,7 +227,7 @@ describe("buildRemoteOpenUrl", () => {
         absolutePath: "/tmp/project.json",
         pathKind: "folder",
       }),
-    ).toBe("vscode://vscode-remote/ssh-remote+sol/tmp/project.json");
+    ).toBe("vscode://vscode-remote/ssh-remote+sol/tmp/project.json/");
   });
 
   it("roots Windows paths", () => {
@@ -219,7 +238,7 @@ describe("buildRemoteOpenUrl", () => {
         absolutePath: "C:\\Users\\theo",
         pathKind: "folder",
       }),
-    ).toBe("vscode://vscode-remote/ssh-remote+sol/C%3A/Users/theo");
+    ).toBe("vscode://vscode-remote/ssh-remote+sol/C%3A/Users/theo/");
   });
 
   it.each(["file", "folder"] as const)("keeps Zed's ssh deep link for a %s", (pathKind) => {

@@ -237,17 +237,17 @@ export const buildRemoteOpenUrl = (input: {
     input.pathKind === "file" &&
     rootedPath.split(":").some((segment) => !Number.isNaN(Number(segment)));
   let targetPath = rootedPath;
-  if (openParent) {
-    const parentPath = rootedPath.slice(0, rootedPath.lastIndexOf("/"));
-    const encodedParent = parentPath.split("/").map(encodeURIComponent).join("/");
+  if (openParent || input.pathKind === "folder") {
+    const folderPath = openParent ? rootedPath.slice(0, rootedPath.lastIndexOf("/")) : rootedPath;
+    const encodedFolder = folderPath.split("/").map(encodeURIComponent).join("/");
     // Match browser/desktop dot-segment normalization before choosing a folder.
     targetPath = decodeURIComponent(
-      new URL(`${scheme}://vscode-remote${encodedParent}/`).pathname,
+      new URL(`${scheme}://vscode-remote${encodedFolder}/`).pathname,
     ).replace(/\/+$/, "");
     // A trailing slash prevents :digits from being treated as a line suffix.
-    // Workspace-looking parents must be skipped too: VS Code treats their
+    // Workspace-looking folders must be skipped too: VS Code treats their
     // extension as a workspace file even with the slash.
-    while (targetPath.toLowerCase().endsWith(".code-workspace")) {
+    while (/\/[^/]+\.code-workspace$/.test(targetPath)) {
       targetPath = targetPath.slice(0, targetPath.lastIndexOf("/")).replace(/\/+$/, "");
     }
     targetPath += "/";

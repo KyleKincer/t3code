@@ -204,7 +204,7 @@ describe("host editor access", () => {
 describe("client editor links", () => {
   it.each([
     ["file", ":1"],
-    ["folder", ""],
+    ["folder", "/"],
   ] as const)("opens an SSH %s URL without host operate permission", async (pathKind, suffix) => {
     state.remote = { mode: "remote-links", host: { kind: "ssh-alias", host: "test-host" } };
     await renderPicker(pathKind);
@@ -233,7 +233,7 @@ describe("client editor links", () => {
     await renderPicker("folder");
     await act(async () => primaryButton().props.onClick());
     expect(state.openUrl).toHaveBeenCalledExactlyOnceWith(
-      "vscode://vscode-remote/ssh-remote+test-host/work/project",
+      "vscode://vscode-remote/ssh-remote+test-host/work/project/",
     );
   });
 
