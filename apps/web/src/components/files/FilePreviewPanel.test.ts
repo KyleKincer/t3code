@@ -8,6 +8,7 @@ import {
   remapFileCommentAnnotations,
 } from "./fileCommentAnnotations";
 import {
+  filePreviewPathKind,
   filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
   resolveFilePreviewPath,
@@ -186,6 +187,54 @@ describe("resolveFilePreviewPath", () => {
       expect(
         shouldShowFileExplorer({ relativePath, explorerOpen: false, attachmentOpen: false }),
       ).toBe(true);
+    }
+  });
+});
+
+describe("remote preview path kind", () => {
+  const contents = { contents: "cached text" };
+  const state = { data: null, error: null, readError: null, isPending: false };
+
+  it("waits for the initial read and pending refreshes", () => {
+    expect(filePreviewPathKind(state)).toBeNull();
+    expect(filePreviewPathKind({ ...state, data: contents, isPending: true })).toBeNull();
+  });
+
+  it("recognizes a successful text read", () => {
+    expect(filePreviewPathKind({ ...state, data: contents })).toBe("file");
+  });
+
+  it.each([
+    ["path_not_file", "folder"],
+    ["binary_file", "file"],
+    ["operation_failed", null],
+    ["workspace_path_outside_root", null],
+    ["resolved_path_outside_root", null],
+  ] as const)("classifies %s before considering stale contents", (failure, expected) => {
+    const readError = new ProjectReadFileError({
+      cwd: "/workspace",
+      relativePath: "preview",
+      failure,
+    });
+    for (const data of [null, contents]) {
+      expect(filePreviewPathKind({ ...state, data, error: readError.message, readError })).toBe(
+        expected,
+      );
+    }
+  });
+
+  it("does not infer a file from untyped errors or cached contents after access is lost", () => {
+    for (const data of [null, contents]) {
+      expect(
+        filePreviewPathKind({ ...state, data, error: "This connection cannot read host files." }),
+      ).toBeNull();
+      const readError = decodeReadError({
+        _tag: "ProjectReadFileError",
+        message: "Legacy read failure.",
+      });
+      expect(
+        filePreviewPathKind({ ...state, data, error: readError.message, readError }),
+      ).toBeNull();
     }
   });
 });

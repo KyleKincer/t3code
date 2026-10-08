@@ -83,6 +83,7 @@ describe("ElectronShell", () => {
         "cursor://vscode-remote/ssh-remote+example.com/home/user/README:1",
         "vscode-insiders://vscode-remote/ssh-remote+example.com/home/user/README:1",
         "vscodium://vscode-remote/ssh-remote+example.com/home/user/README:1",
+        "vscode://vscode-remote/ssh-remote+example.com/tmp/parent%3A12/",
       ];
       const results = yield* Effect.forEach(urls, (url) => electronShell.openExternal(url));
 

@@ -125,6 +125,8 @@ describe("buildRemoteOpenUrl", () => {
     ["/tmp/my file #1?.json", "/tmp/my%20file%20%231%3F.json"],
     ["C:\\Users\\user\\settings.json", "/C%3A/Users/user/settings.json"],
     ["/tmp/project.code-workspace", "/tmp/project.code-workspace"],
+    ["/tmp/foo:bar.txt", "/tmp/foo%3Abar.txt"],
+    ["/tmp/a:12/file.ts", "/tmp/a%3A12/file.ts"],
   ])("opens %s as a remote file", (absolutePath, encodedPath) => {
     expect(
       buildRemoteOpenUrl({
@@ -134,6 +136,48 @@ describe("buildRemoteOpenUrl", () => {
         pathKind: "file",
       }),
     ).toBe(`vscode://vscode-remote/ssh-remote+sol${encodedPath}:1`);
+  });
+
+  it.each(["vscode", "cursor", "vscode-insiders", "vscodium"] as const)(
+    "opens the parent of ambiguous colon paths in %s",
+    (editor) => {
+      for (const [absolutePath, encodedParent] of [
+        ["/tmp/foo:12", "/tmp/"],
+        ["/tmp/foo:12:bar.txt", "/tmp/"],
+        ["/foo:12", "/"],
+        ["/tmp/foo::bar.txt", "/tmp/"],
+        ["/tmp/foo:0x10:bar.txt", "/tmp/"],
+        ["/tmp/foo:1e2:bar.txt", "/tmp/"],
+        ["/tmp/foo:Infinity:bar.txt", "/tmp/"],
+        ["/tmp/a:12:bar/file.ts", "/tmp/a%3A12%3Abar/"],
+        ["/tmp/parent:12/foo:12", "/tmp/parent%3A12/"],
+        ["/tmp/project.code-workspace/foo:12", "/tmp/"],
+        ["/tmp/project.code-workspace/./foo:12", "/tmp/"],
+        ["/tmp/project.code-workspace//foo:12", "/tmp/"],
+        ["/tmp/project.code-workspace/sub/../foo:12", "/tmp/"],
+        ["/outer.code-workspace/inner.code-workspace/foo:12", "/"],
+        ["/outer.code-workspace//inner.code-workspace/foo:12", "/"],
+        ["C:\\outer.code-workspace\\foo:12", "/C%3A/"],
+        ["/tmp/my folder #1?/foo:12", "/tmp/my%20folder%20%231%3F/"],
+        ["C:\\tmp\\foo:12", "/C%3A/tmp/"],
+      ] as const) {
+        const url = buildRemoteOpenUrl({ editor, host: "sol", absolutePath, pathKind: "file" });
+        expect(url).toBe(`${editor}://vscode-remote/ssh-remote+sol${encodedParent}`);
+        // Desktop and browser URL serialization must preserve the folder fallback.
+        expect(new URL(url!).href).toBe(url);
+      }
+    },
+  );
+
+  it("keeps colon filenames unchanged for Zed", () => {
+    expect(
+      buildRemoteOpenUrl({
+        editor: "zed",
+        host: "sol",
+        absolutePath: "/tmp/foo:12:bar.txt",
+        pathKind: "file",
+      }),
+    ).toBe("zed://ssh/sol/tmp/foo%3A12%3Abar.txt");
   });
 
   it("builds a vscode-remote folder deep link", () => {

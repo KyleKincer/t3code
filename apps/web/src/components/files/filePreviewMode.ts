@@ -8,6 +8,20 @@ export function resolveFilePreviewPath(path: string | null, cwd: string): string
   return path === "." || workspaceRelativeFilePath(path, cwd) === "." ? null : path;
 }
 
+/** Use the latest read outcome, never cached contents after a failed refresh. */
+export function filePreviewPathKind(file: {
+  readonly data: { readonly contents: string } | null;
+  readonly error: string | null;
+  readonly readError: ProjectReadFileError | null;
+  readonly isPending: boolean;
+}): "file" | "folder" | null {
+  if (file.isPending) return null;
+  if (file.readError?.failure === "path_not_file") return "folder";
+  if (file.readError?.failure === "binary_file") return "file";
+  if (file.error !== null || file.readError !== null) return null;
+  return file.data === null ? null : "file";
+}
+
 export const isMarkdownPreviewFile = (path: string): boolean => /\.(?:md|mdx)$/i.test(path);
 
 /** Describe existing failure codes without exposing the underlying platform cause. */

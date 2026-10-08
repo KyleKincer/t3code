@@ -128,7 +128,10 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function renderPicker(pathKind: "file" | "folder" = "folder") {
+async function renderPicker(
+  pathKind: "file" | "folder" = "folder",
+  openInPath: string | null = "/work/project",
+) {
   await act(async () => {
     for (const listener of state.listeners) listener();
     const node = (
@@ -136,7 +139,7 @@ async function renderPicker(pathKind: "file" | "folder" = "folder") {
         environmentId={selected}
         keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
         availableEditors={editors}
-        openInPath="/work/project"
+        openInPath={openInPath}
         pathKind={pathKind}
         compact
       />
@@ -213,6 +216,25 @@ describe("client editor links", () => {
     expect(state.run).not.toHaveBeenCalled();
     expect(state.markHintSeen).toHaveBeenCalledOnce();
     expect(state.setPreferred).toHaveBeenCalledExactlyOnceWith("vscode");
+  });
+
+  it("blocks remote buttons and shortcuts until the preview path kind is known", async () => {
+    state.remote = { mode: "remote-links", host: { kind: "ssh-alias", host: "test-host" } };
+    await renderPicker("file", null);
+    expect(primaryButton().props.disabled).toBe(true);
+    const event = keyboardEvent();
+    await act(async () => {
+      primaryButton().props.onClick();
+      state.keydown?.(event);
+    });
+    expect(state.openUrl).not.toHaveBeenCalled();
+    expect(state.run).not.toHaveBeenCalled();
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    await renderPicker("folder");
+    await act(async () => primaryButton().props.onClick());
+    expect(state.openUrl).toHaveBeenCalledExactlyOnceWith(
+      "vscode://vscode-remote/ssh-remote+test-host/work/project",
+    );
   });
 
   it("does not change preferences when the client rejects the SSH URL", async () => {

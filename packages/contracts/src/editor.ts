@@ -139,9 +139,30 @@ export const buildRemoteOpenUrl = (input: {
     const encodedZedPath = zedPath.split("/").map(encodeURIComponent).join("/");
     return `${scheme}://ssh/${encodedHost}${encodedZedPath}`;
   }
-  const encodedPath = rootedPath.split("/").map(encodeURIComponent).join("/");
+  // VS Code decodes paths before parsing :line, including numeric colon segments
+  // inside filenames. Open a containing folder instead. Drive colons are safe.
+  const openParent =
+    input.pathKind === "file" &&
+    rootedPath.split(":").some((segment) => !Number.isNaN(Number(segment)));
+  let targetPath = rootedPath;
+  if (openParent) {
+    const parentPath = rootedPath.slice(0, rootedPath.lastIndexOf("/"));
+    const encodedParent = parentPath.split("/").map(encodeURIComponent).join("/");
+    // Match browser/desktop dot-segment normalization before choosing a folder.
+    targetPath = decodeURIComponent(
+      new URL(`${scheme}://vscode-remote${encodedParent}/`).pathname,
+    ).replace(/\/+$/, "");
+    // A trailing slash prevents :digits from being treated as a line suffix.
+    // Workspace-looking parents must be skipped too: VS Code treats their
+    // extension as a workspace file even with the slash.
+    while (targetPath.toLowerCase().endsWith(".code-workspace")) {
+      targetPath = targetPath.slice(0, targetPath.lastIndexOf("/")).replace(/\/+$/, "");
+    }
+    targetPath += "/";
+  }
+  const encodedPath = targetPath.split("/").map(encodeURIComponent).join("/");
   // A :line suffix makes VS Code's remote URL handler open a file instead of a folder.
-  const position = input.pathKind === "file" ? ":1" : "";
+  const position = input.pathKind === "file" && !openParent ? ":1" : "";
   return `${scheme}://vscode-remote/ssh-remote+${encodedHost}${encodedPath}${position}`;
 };
 
