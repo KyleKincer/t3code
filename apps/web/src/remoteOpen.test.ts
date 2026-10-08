@@ -250,9 +250,35 @@ describe("buildRemoteOpenUrl", () => {
     },
   );
 
+  it.each(["file", "folder"] as const)(
+    "preserves Toolbox ssh deep links for %s targets",
+    (pathKind) => {
+      expect(
+        buildRemoteOpenUrl({
+          editor: "pycharm",
+          host: "sol.tail1234.ts.net",
+          absolutePath: "/home/theo/code/my repo",
+          pathKind,
+        }),
+      ).toBe(
+        "jetbrains://gateway/ssh/environment?h=sol.tail1234.ts.net&launchIde=true&ideHint=PY&projectHint=%2Fhome%2Ftheo%2Fcode%2Fmy+repo",
+      );
+      expect(
+        buildRemoteOpenUrl({
+          editor: "idea",
+          host: "sol",
+          absolutePath: "C:\\Users\\theo",
+          pathKind,
+        }),
+      ).toBe(
+        "jetbrains://gateway/ssh/environment?h=sol&launchIde=true&ideHint=IU&projectHint=C%3A%2FUsers%2Ftheo",
+      );
+    },
+  );
+
   it("returns undefined for editors without remote support", () => {
     expect(
-      buildRemoteOpenUrl({ editor: "idea", host: "sol", absolutePath: "/tmp/x", pathKind: "file" }),
+      buildRemoteOpenUrl({ editor: "kiro", host: "sol", absolutePath: "/tmp/x", pathKind: "file" }),
     ).toBe(undefined);
   });
 });
