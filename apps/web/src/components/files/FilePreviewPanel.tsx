@@ -104,6 +104,7 @@ import {
   filePreviewPathKind,
   filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
+  resolveFilePreviewEditorPath,
   resolveFilePreviewPath,
   setMarkdownTaskChecked,
   shouldShowFileExplorer,
@@ -1279,7 +1280,7 @@ export default function FilePreviewPanel({
               environmentId={environmentId}
               keybindings={keybindings}
               availableEditors={availableEditors}
-              openInPath={absolutePath}
+              openInPath={resolveFilePreviewEditorPath(relativePath, cwd)}
               pathKind={pathKind}
               compact
             />

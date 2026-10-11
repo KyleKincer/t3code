@@ -10,6 +10,10 @@ import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 
 import { resolveRemoteOpenState } from "./remoteOpen";
+import {
+  resolveFilePreviewEditorPath,
+  resolveFilePreviewPath,
+} from "./components/files/filePreviewMode";
 
 const environmentId = EnvironmentId.make("environment-1");
 
@@ -138,6 +142,47 @@ function interpretVsCodeRemoteUrl(url: string, protocolPath: Path.Path) {
 }
 
 describe("buildRemoteOpenUrl", () => {
+  it.effect.each(["vscode", "cursor", "vscode-insiders", "vscodium"] as const)(
+    "preserves literal preview paths before %s's protocol handling",
+    (editor) =>
+      Effect.gen(function* () {
+        const protocolPath = yield* Path.Path;
+        for (const [cwd, requestedPath, pathKind, expectedKind, expectedPath] of [
+          ["/tmp", "foo:0", "file", "folder", "/tmp/"],
+          ["/tmp", "foo:00", "file", "folder", "/tmp/"],
+          ["/tmp", "build:0012", "folder", "folder", "/tmp/build:0012/"],
+          ["/tmp", "build:12:00", "folder", "folder", "/tmp/build:12:00/"],
+          ["/tmp", "/other/build:0012", "folder", "folder", "/other/build:0012/"],
+          ["C:\\repo", "src\\notes.ts", "file", "file", "/C:/repo/src/notes.ts"],
+          ["/tmp", "~/notes.ts", "file", "file", "/tmp/~/notes.ts"],
+          ["C:\\repo", "~\\notes.ts", "file", "file", "/C:/repo/~/notes.ts"],
+        ] as const) {
+          const previewPath = resolveFilePreviewPath(requestedPath, cwd);
+          expect(previewPath).toBe(requestedPath);
+          const absolutePath = resolveFilePreviewEditorPath(previewPath!, cwd);
+          const url = buildRemoteOpenUrl({ editor, host: "sol", absolutePath, pathKind });
+          expect(interpretVsCodeRemoteUrl(url!, protocolPath)).toEqual({
+            kind: expectedKind,
+            path: expectedPath,
+          });
+        }
+      }).pipe(Effect.provide(Path.layer)),
+  );
+
+  it("preserves literal colon preview filenames for Zed and Toolbox", () => {
+    const absolutePath = resolveFilePreviewEditorPath("foo:0", "/tmp");
+    expect(buildRemoteOpenUrl({ editor: "zed", host: "sol", absolutePath, pathKind: "file" })).toBe(
+      "zed://ssh/sol/tmp/foo%3A0",
+    );
+    const toolbox = buildRemoteOpenUrl({
+      editor: "idea",
+      host: "sol",
+      absolutePath,
+      pathKind: "file",
+    });
+    expect(new URL(toolbox!).searchParams.get("projectHint")).toBe("/tmp/foo:0");
+  });
+
   it.effect.each(["vscode", "cursor", "vscode-insiders", "vscodium"] as const)(
     "preserves file identity or a safe folder through %s's remote protocol parser",
     (editor) =>
