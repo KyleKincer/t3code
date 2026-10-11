@@ -200,6 +200,7 @@ export const buildRemoteOpenUrl = (input: {
   readonly editor: EditorId;
   readonly host: string;
   readonly absolutePath: string;
+  readonly pathKind: "file" | "folder";
 }): string | undefined => {
   const scheme = remoteSchemeForEditor(input.editor);
   if (scheme === undefined) {
@@ -230,8 +231,31 @@ export const buildRemoteOpenUrl = (input: {
     const encodedZedPath = zedPath.split("/").map(encodeURIComponent).join("/");
     return `${scheme}://ssh/${encodedHost}${encodedZedPath}`;
   }
-  const encodedPath = rootedPath.split("/").map(encodeURIComponent).join("/");
-  return `${scheme}://vscode-remote/ssh-remote+${encodedHost}${encodedPath}`;
+  // VS Code decodes paths before parsing :line, including numeric colon segments
+  // inside filenames. Open a containing folder instead. Drive colons are safe.
+  const openParent =
+    input.pathKind === "file" &&
+    rootedPath.split(":").some((segment) => !Number.isNaN(Number(segment)));
+  let targetPath = rootedPath;
+  if (openParent || input.pathKind === "folder") {
+    const folderPath = openParent ? rootedPath.slice(0, rootedPath.lastIndexOf("/")) : rootedPath;
+    const encodedFolder = folderPath.split("/").map(encodeURIComponent).join("/");
+    // Match browser/desktop dot-segment normalization before choosing a folder.
+    targetPath = decodeURIComponent(
+      new URL(`${scheme}://vscode-remote${encodedFolder}/`).pathname,
+    ).replace(/\/+$/, "");
+    // A trailing slash prevents :digits from being treated as a line suffix.
+    // Workspace-looking folders must be skipped too: VS Code treats their
+    // extension as a workspace file even with the slash.
+    while (/\/[^/]+\.code-workspace$/.test(targetPath)) {
+      targetPath = targetPath.slice(0, targetPath.lastIndexOf("/")).replace(/\/+$/, "");
+    }
+    targetPath += "/";
+  }
+  const encodedPath = targetPath.split("/").map(encodeURIComponent).join("/");
+  // A :line suffix makes VS Code's remote URL handler open a file instead of a folder.
+  const position = input.pathKind === "file" && !openParent ? ":1" : "";
+  return `${scheme}://vscode-remote/ssh-remote+${encodedHost}${encodedPath}${position}`;
 };
 
 /**

@@ -5,7 +5,9 @@ import {
   SshConnectionTarget,
 } from "@t3tools/client-runtime/connection";
 import { buildRemoteOpenUrl, EnvironmentId } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Path from "effect/Path";
 
 import { resolveRemoteOpenState } from "./remoteOpen";
 
@@ -118,68 +120,232 @@ describe("resolveRemoteOpenState", () => {
   });
 });
 
+// Protocol oracle from VS Code eef761e: app.ts getWindowOpenableFromProtocolUrl,
+// workspace.ts hasWorkspaceFileExtension, and extpath.ts parseLineAndColumnAware.
+// Serialize first, matching the browser and Electron handoff, then decode as URI.parse does.
+function interpretVsCodeRemoteUrl(url: string, protocolPath: Path.Path) {
+  const decodedPath = decodeURIComponent(new URL(url).pathname);
+  const path = decodedPath.slice(decodedPath.indexOf("/", 1));
+  if (protocolPath.extname(path) === ".code-workspace") return { kind: "workspace", path };
+  if (!/:\d+$/.test(path)) return { kind: "folder", path };
+  return {
+    kind: "file",
+    path: path
+      .split(":")
+      .filter((segment) => Number.isNaN(Number(segment)))
+      .join(":"),
+  };
+}
+
 describe("buildRemoteOpenUrl", () => {
-  it("builds a vscode-remote deep link", () => {
+  it.effect.each(["vscode", "cursor", "vscode-insiders", "vscodium"] as const)(
+    "preserves file identity or a safe folder through %s's remote protocol parser",
+    (editor) =>
+      Effect.gen(function* () {
+        const protocolPath = yield* Path.Path;
+        for (const [absolutePath, pathKind, expectedKind, expectedPath] of [
+          ["/tmp/README", "file", "file", "/tmp/README"],
+          ["/tmp/project.code-workspace", "file", "file", "/tmp/project.code-workspace"],
+          ["/tmp/a:12/file.ts", "file", "file", "/tmp/a:12/file.ts"],
+          ["/tmp/a:12:bar.ts", "file", "folder", "/tmp/"],
+          ["/tmp/a:0x10:bar.ts", "file", "folder", "/tmp/"],
+          ["/tmp/project.code-workspace/sub/../a:12", "file", "folder", "/tmp/"],
+          ["C:\\tmp\\file.ts", "file", "file", "/C:/tmp/file.ts"],
+          ["/tmp/build:12", "folder", "folder", "/tmp/build:12/"],
+          ["/tmp/project.code-workspace", "folder", "folder", "/tmp/"],
+          ["/outer.code-workspace/inner.code-workspace", "folder", "folder", "/"],
+          ["/tmp/.code-workspace", "folder", "folder", "/tmp/.code-workspace/"],
+          ["/tmp/project.CODE-WORKSPACE", "folder", "folder", "/tmp/project.CODE-WORKSPACE/"],
+        ] as const) {
+          const url = buildRemoteOpenUrl({ editor, host: "sol", absolutePath, pathKind });
+          expect(url).toBeDefined();
+          expect(interpretVsCodeRemoteUrl(url!, protocolPath)).toEqual({
+            kind: expectedKind,
+            path: expectedPath,
+          });
+        }
+      }).pipe(Effect.provide(Path.layer)),
+  );
+
+  it.each([
+    ["/home/user/.local/share/app/settings.json", "/home/user/.local/share/app/settings.json"],
+    ["/tmp/README", "/tmp/README"],
+    ["/tmp/my file #1?.json", "/tmp/my%20file%20%231%3F.json"],
+    ["C:\\Users\\user\\settings.json", "/C%3A/Users/user/settings.json"],
+    ["/tmp/project.code-workspace", "/tmp/project.code-workspace"],
+    ["/tmp/foo:bar.txt", "/tmp/foo%3Abar.txt"],
+    ["/tmp/a:12/file.ts", "/tmp/a%3A12/file.ts"],
+  ])("opens %s as a remote file", (absolutePath, encodedPath) => {
+    expect(
+      buildRemoteOpenUrl({
+        editor: "vscode",
+        host: "sol",
+        absolutePath,
+        pathKind: "file",
+      }),
+    ).toBe(`vscode://vscode-remote/ssh-remote+sol${encodedPath}:1`);
+  });
+
+  it.each(["vscode", "cursor", "vscode-insiders", "vscodium"] as const)(
+    "opens the parent of ambiguous colon paths in %s",
+    (editor) => {
+      for (const [absolutePath, encodedParent] of [
+        ["/tmp/foo:12", "/tmp/"],
+        ["/tmp/foo:12:bar.txt", "/tmp/"],
+        ["/foo:12", "/"],
+        ["/tmp/foo::bar.txt", "/tmp/"],
+        ["/tmp/foo:0x10:bar.txt", "/tmp/"],
+        ["/tmp/foo:1e2:bar.txt", "/tmp/"],
+        ["/tmp/foo:Infinity:bar.txt", "/tmp/"],
+        ["/tmp/a:12:bar/file.ts", "/tmp/a%3A12%3Abar/"],
+        ["/tmp/parent:12/foo:12", "/tmp/parent%3A12/"],
+        ["/tmp/project.code-workspace/foo:12", "/tmp/"],
+        ["/tmp/project.code-workspace/./foo:12", "/tmp/"],
+        ["/tmp/project.code-workspace//foo:12", "/tmp/"],
+        ["/tmp/project.code-workspace/sub/../foo:12", "/tmp/"],
+        ["/outer.code-workspace/inner.code-workspace/foo:12", "/"],
+        ["/outer.code-workspace//inner.code-workspace/foo:12", "/"],
+        ["C:\\outer.code-workspace\\foo:12", "/C%3A/"],
+        ["/tmp/my folder #1?/foo:12", "/tmp/my%20folder%20%231%3F/"],
+        ["C:\\tmp\\foo:12", "/C%3A/tmp/"],
+      ] as const) {
+        const url = buildRemoteOpenUrl({ editor, host: "sol", absolutePath, pathKind: "file" });
+        expect(url).toBe(`${editor}://vscode-remote/ssh-remote+sol${encodedParent}`);
+        // Desktop and browser URL serialization must preserve the folder fallback.
+        expect(new URL(url!).href).toBe(url);
+      }
+    },
+  );
+
+  it.each(["vscode", "cursor", "vscode-insiders", "vscodium"] as const)(
+    "keeps explicit folders out of %s's file and workspace handlers",
+    (editor) => {
+      for (const [absolutePath, encodedFolder] of [
+        ["/tmp/build:12", "/tmp/build%3A12/"],
+        ["/tmp/.code-workspace", "/tmp/.code-workspace/"],
+        ["/tmp/project.CODE-WORKSPACE", "/tmp/project.CODE-WORKSPACE/"],
+        ["/tmp/project.code-workspace", "/tmp/"],
+        ["/tmp/project.code-workspace/./", "/tmp/"],
+        ["/outer.code-workspace/inner.code-workspace", "/"],
+        ["C:\\tmp\\build:12", "/C%3A/tmp/build%3A12/"],
+      ] as const) {
+        const url = buildRemoteOpenUrl({ editor, host: "sol", absolutePath, pathKind: "folder" });
+        expect(url).toBe(`${editor}://vscode-remote/ssh-remote+sol${encodedFolder}`);
+        expect(new URL(url!).href).toBe(url);
+      }
+    },
+  );
+
+  it("keeps colon filenames unchanged for Zed", () => {
+    expect(
+      buildRemoteOpenUrl({
+        editor: "zed",
+        host: "sol",
+        absolutePath: "/tmp/foo:12:bar.txt",
+        pathKind: "file",
+      }),
+    ).toBe("zed://ssh/sol/tmp/foo%3A12%3Abar.txt");
+  });
+
+  it("builds a vscode-remote folder deep link", () => {
     expect(
       buildRemoteOpenUrl({
         editor: "vscode",
         host: "sol.tail1234.ts.net",
         absolutePath: "/home/theo/code/my repo",
+        pathKind: "folder",
       }),
-    ).toBe("vscode://vscode-remote/ssh-remote+sol.tail1234.ts.net/home/theo/code/my%20repo");
+    ).toBe("vscode://vscode-remote/ssh-remote+sol.tail1234.ts.net/home/theo/code/my%20repo/");
   });
 
-  it("uses the fork's scheme", () => {
-    expect(buildRemoteOpenUrl({ editor: "cursor", host: "sol", absolutePath: "/tmp/x" })).toBe(
-      "cursor://vscode-remote/ssh-remote+sol/tmp/x",
-    );
+  it.each(["cursor", "vscode-insiders", "vscodium"] as const)("uses %s's scheme", (editor) => {
+    expect(
+      buildRemoteOpenUrl({ editor, host: "sol", absolutePath: "/tmp/x", pathKind: "file" }),
+    ).toBe(`${editor}://vscode-remote/ssh-remote+sol/tmp/x:1`);
+    expect(
+      buildRemoteOpenUrl({ editor, host: "sol", absolutePath: "/tmp/x", pathKind: "folder" }),
+    ).toBe(`${editor}://vscode-remote/ssh-remote+sol/tmp/x/`);
+  });
+
+  it("keeps folders with file extensions as folders", () => {
+    expect(
+      buildRemoteOpenUrl({
+        editor: "vscode",
+        host: "sol",
+        absolutePath: "/tmp/project.json",
+        pathKind: "folder",
+      }),
+    ).toBe("vscode://vscode-remote/ssh-remote+sol/tmp/project.json/");
   });
 
   it("roots Windows paths", () => {
     expect(
-      buildRemoteOpenUrl({ editor: "vscode", host: "sol", absolutePath: "C:\\Users\\theo" }),
-    ).toBe("vscode://vscode-remote/ssh-remote+sol/C%3A/Users/theo");
+      buildRemoteOpenUrl({
+        editor: "vscode",
+        host: "sol",
+        absolutePath: "C:\\Users\\theo",
+        pathKind: "folder",
+      }),
+    ).toBe("vscode://vscode-remote/ssh-remote+sol/C%3A/Users/theo/");
   });
 
-  it("builds Zed's ssh deep link", () => {
+  it.each(["file", "folder"] as const)("keeps Zed's ssh deep link for a %s", (pathKind) => {
     expect(
       buildRemoteOpenUrl({
         editor: "zed",
         host: "sol.tail1234.ts.net",
         absolutePath: "/home/theo/code/my repo",
+        pathKind,
       }),
     ).toBe("zed://ssh/sol.tail1234.ts.net/home/theo/code/my%20repo");
   });
 
-  it("drops the Windows drive letter for Zed", () => {
-    expect(
-      buildRemoteOpenUrl({ editor: "zed", host: "sol", absolutePath: "C:\\Users\\theo" }),
-    ).toBe("zed://ssh/sol/Users/theo");
-    expect(buildRemoteOpenUrl({ editor: "zed", host: "sol", absolutePath: "/C:/project" })).toBe(
-      "zed://ssh/sol/C%3A/project",
-    );
-  });
+  it.each(["file", "folder"] as const)(
+    "drops the Windows drive letter for a Zed %s",
+    (pathKind) => {
+      expect(
+        buildRemoteOpenUrl({
+          editor: "zed",
+          host: "sol",
+          absolutePath: "C:\\Users\\theo",
+          pathKind,
+        }),
+      ).toBe("zed://ssh/sol/Users/theo");
+      expect(
+        buildRemoteOpenUrl({ editor: "zed", host: "sol", absolutePath: "/C:/project", pathKind }),
+      ).toBe("zed://ssh/sol/C%3A/project");
+    },
+  );
 
-  it("builds a Toolbox ssh deep link for JetBrains IDEs", () => {
-    expect(
-      buildRemoteOpenUrl({
-        editor: "pycharm",
-        host: "sol.tail1234.ts.net",
-        absolutePath: "/home/theo/code/my repo",
-      }),
-    ).toBe(
-      "jetbrains://gateway/ssh/environment?h=sol.tail1234.ts.net&launchIde=true&ideHint=PY&projectHint=%2Fhome%2Ftheo%2Fcode%2Fmy+repo",
-    );
-    expect(
-      buildRemoteOpenUrl({ editor: "idea", host: "sol", absolutePath: "C:\\Users\\theo" }),
-    ).toBe(
-      "jetbrains://gateway/ssh/environment?h=sol&launchIde=true&ideHint=IU&projectHint=C%3A%2FUsers%2Ftheo",
-    );
-  });
+  it.each(["file", "folder"] as const)(
+    "preserves Toolbox ssh deep links for %s targets",
+    (pathKind) => {
+      expect(
+        buildRemoteOpenUrl({
+          editor: "pycharm",
+          host: "sol.tail1234.ts.net",
+          absolutePath: "/home/theo/code/my repo",
+          pathKind,
+        }),
+      ).toBe(
+        "jetbrains://gateway/ssh/environment?h=sol.tail1234.ts.net&launchIde=true&ideHint=PY&projectHint=%2Fhome%2Ftheo%2Fcode%2Fmy+repo",
+      );
+      expect(
+        buildRemoteOpenUrl({
+          editor: "idea",
+          host: "sol",
+          absolutePath: "C:\\Users\\theo",
+          pathKind,
+        }),
+      ).toBe(
+        "jetbrains://gateway/ssh/environment?h=sol&launchIde=true&ideHint=IU&projectHint=C%3A%2FUsers%2Ftheo",
+      );
+    },
+  );
 
   it("returns undefined for editors without remote support", () => {
-    expect(buildRemoteOpenUrl({ editor: "kiro", host: "sol", absolutePath: "/tmp/x" })).toBe(
-      undefined,
-    );
+    expect(
+      buildRemoteOpenUrl({ editor: "kiro", host: "sol", absolutePath: "/tmp/x", pathKind: "file" }),
+    ).toBe(undefined);
   });
 });

@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -101,6 +102,7 @@ vi.mock("~/state/queries", () => ({
 import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import { useT3ProjectFileState } from "~/hooks/useT3ProjectFileScripts";
 import { useProjectEntriesQuery, useProjectFileQuery } from "./projectFilesQueryState";
+import { filePreviewPathKind } from "./filePreviewMode";
 
 const environmentId = EnvironmentId.make("environment-1");
 const decodeReadError = Schema.decodeSync(ProjectReadFileError);
@@ -445,6 +447,43 @@ describe("project query refresh", () => {
       atomHooks.registry = null;
     }
   });
+
+  it.each([
+    ["path_not_file", false, "folder"],
+    ["binary_file", false, "file"],
+    ["operation_failed", false, null],
+    ["resolved_path_outside_root", false, null],
+    ["path_not_file", true, null],
+    ["binary_file", true, null],
+  ] as const)(
+    "classifies a %s read with cached contents and waiting=%s",
+    (failure, waiting, expectedKind) => {
+      const error = new ProjectReadFileError({
+        cwd: "/repo",
+        relativePath: "src/preview.ts",
+        failure,
+      });
+      const readAtom = Atom.make(
+        AsyncResult.failure(Cause.fail(error), {
+          previousSuccess: Option.some(AsyncResult.success(file("previous contents"))),
+          waiting,
+        }),
+      );
+      const registry = AtomRegistry.make();
+      projectMocks.readFile.mockReturnValue(readAtom);
+      projectMocks.optimisticFile.mockReturnValue(Atom.make(null));
+      atomHooks.registry = registry;
+      try {
+        const query = useProjectFileQuery(environmentId, "/repo", "src/preview.ts");
+        expect(query.data?.contents).toBe("previous contents");
+        expect(query.readError).toBe(error);
+        expect(filePreviewPathKind(query)).toBe(expectedKind);
+      } finally {
+        registry.dispose();
+        atomHooks.registry = null;
+      }
+    },
+  );
 
   it("reports a directory named like an image as not a file", async () => {
     const readAtom = Atom.make(

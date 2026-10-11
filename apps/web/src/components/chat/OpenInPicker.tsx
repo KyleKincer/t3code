@@ -207,7 +207,8 @@ export const OpenInPicker = memo(function OpenInPicker({
   environmentId,
   keybindings,
   availableEditors,
-  openInCwd,
+  openInPath,
+  pathKind,
   presentation = "toolbar",
   compact = false,
   enableShortcut = true,
@@ -216,7 +217,8 @@ export const OpenInPicker = memo(function OpenInPicker({
   environmentId: EnvironmentId;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
-  openInCwd: string | null;
+  openInPath: string | null;
+  pathKind: "file" | "folder" | null;
   presentation?: "toolbar" | "menu";
   compact?: boolean;
   enableShortcut?: boolean;
@@ -229,8 +231,10 @@ export const OpenInPicker = memo(function OpenInPicker({
   const remote = useRemoteOpenState(environmentId);
   const canOperateHost = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const isHostEditorDenied = remote.mode === "local-exec" && !canOperateHost;
-  const canOpenEditor = remote.mode !== "remote-unavailable" && !isHostEditorDenied;
-  const [menuOpen, setMenuOpen] = useComposerMenuState(isHostEditorDenied);
+  const isRemotePathUnknown = remote.mode === "remote-links" && pathKind === null;
+  const canOpenEditor =
+    remote.mode !== "remote-unavailable" && !isHostEditorDenied && !isRemotePathUnknown;
+  const [menuOpen, setMenuOpen] = useComposerMenuState(isHostEditorDenied || isRemotePathUnknown);
   const remoteCapableEditors = useRemoteCapableEditors();
   const [remoteHintSeen, markRemoteHintSeen] = useRemoteOpenHint();
   const environmentLabel = useEnvironment(environmentId)?.label ?? "this machine";
@@ -246,15 +250,17 @@ export const OpenInPicker = memo(function OpenInPicker({
 
   const openInEditor = useCallback(
     (editorId: EditorId | null) => {
-      if (!openInCwd) return;
+      if (!openInPath) return;
       const editor = editorId ?? preferredEditor;
       if (!editor) return;
       if (remote.mode === "remote-unavailable") return;
       if (remote.mode === "remote-links") {
+        if (pathKind === null) return;
         const url = buildRemoteOpenUrl({
           editor,
           host: remote.host.host,
-          absolutePath: openInCwd,
+          absolutePath: openInPath,
+          pathKind,
         });
         if (url === undefined) return;
         // Only record hint-seen/preferred when the shell actually accepted
@@ -270,7 +276,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       const result = openInEditorMutation({
         environmentId,
         input: {
-          cwd: openInCwd,
+          cwd: openInPath,
           editor,
         },
       });
@@ -280,8 +286,9 @@ export const OpenInPicker = memo(function OpenInPicker({
     [
       environmentId,
       markRemoteHintSeen,
-      openInCwd,
+      openInPath,
       openInEditorMutation,
+      pathKind,
       preferredEditor,
       remote,
       setPreferredEditor,
@@ -297,7 +304,7 @@ export const OpenInPicker = memo(function OpenInPicker({
     if (!enableShortcut || !canOpenEditor) return;
     const handler = (e: globalThis.KeyboardEvent) => {
       if (!isOpenFavoriteEditorShortcut(e, keybindings)) return;
-      if (!openInCwd) return;
+      if (!openInPath) return;
       if (!preferredEditor) return;
       if (
         remote.mode === "local-exec" &&
@@ -315,7 +322,7 @@ export const OpenInPicker = memo(function OpenInPicker({
     enableShortcut,
     environmentId,
     keybindings,
-    openInCwd,
+    openInPath,
     openInEditor,
     preferredEditor,
     remote.mode,
@@ -338,7 +345,7 @@ export const OpenInPicker = memo(function OpenInPicker({
           {options.map(({ label, Icon, value, kind }) => (
             <MenuItem
               density={presentation === "menu" ? "touch" : "default"}
-              disabled={!openInCwd || !canOpenEditor}
+              disabled={!openInPath || !canOpenEditor}
               key={value}
               onClick={() => openInEditor(value)}
             >
@@ -365,7 +372,7 @@ export const OpenInPicker = memo(function OpenInPicker({
           <MenuItem
             density={presentation === "menu" ? "touch" : "default"}
 
-            disabled={!openInCwd || !canOpenEditor}
+            disabled={!openInPath || !canOpenEditor}
             onClick={() => openInEditor(preferredEditor)}
           >
             <primaryOption.Icon className={cn("size-4", getOpenInIconClass(primaryOption.kind))} />
@@ -376,7 +383,7 @@ export const OpenInPicker = memo(function OpenInPicker({
           </MenuItem>
         )}
         <MenuSub>
-          <MenuSubTrigger density="touch" disabled={isHostEditorDenied}>
+          <MenuSubTrigger density="touch" disabled={isHostEditorDenied || isRemotePathUnknown}>
             <SquareArrowOutUpRightIcon className="size-4" />
             <MenuItemLabel>Open in…</MenuItemLabel>
           </MenuSubTrigger>
@@ -400,7 +407,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         variant={isPanel ? "ghost" : "outline"}
         part="primary"
         panel={isPanel}
-        disabled={!preferredEditor || !openInCwd || !canOpenEditor}
+        disabled={!preferredEditor || !openInPath || !canOpenEditor}
         onClick={() => openInEditor(preferredEditor)}
       >
         {primaryOption?.Icon ? (
@@ -435,7 +442,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       )}
       <Menu open={menuOpen} onOpenChange={setMenuOpen}>
         <MenuTrigger
-          disabled={isHostEditorDenied}
+          disabled={isHostEditorDenied || isRemotePathUnknown}
           render={
             <ThreadDetailsControl
               aria-label="Choose editor"
