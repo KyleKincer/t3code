@@ -10,6 +10,7 @@ import type { RemoteOpenState } from "../../remoteOpen";
 const state = vi.hoisted(() => ({
   allowed: new Set<string>(),
   remote: { mode: "local-exec" } as RemoteOpenState,
+  clientEditors: ["vscode"] as readonly EditorId[],
   run: vi.fn(),
   openUrl: vi.fn(),
   setPreferred: vi.fn(),
@@ -37,15 +38,25 @@ vi.mock("../../state/session", async () => {
 vi.mock("../../state/shell", () => ({ shellEnvironment: { openInEditor: "openInEditor" } }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.run }));
 vi.mock("../../state/environments", () => ({ useEnvironment: () => ({ label: "Test host" }) }));
-vi.mock("../../editorPreferences", () => ({
-  usePreferredEditor: (available: readonly EditorId[]) => [
-    available[0] ?? null,
-    state.setPreferred,
-  ],
-}));
+vi.mock("../../editorPreferences", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../editorPreferences")>();
+  return {
+    ...actual,
+    usePreferredEditor: (available: readonly EditorId[]) => {
+      const [preferred, setPreferred] = actual.usePreferredEditor(available);
+      return [
+        preferred,
+        (editor: EditorId) => {
+          state.setPreferred(editor);
+          setPreferred(editor);
+        },
+      ] as const;
+    },
+  };
+});
 vi.mock("../../remoteOpen", () => ({
   useRemoteOpenState: () => state.remote,
-  useRemoteCapableEditors: () => editors,
+  useRemoteCapableEditors: () => state.clientEditors,
   useRemoteOpenHint: () => [false, state.markHintSeen],
   openRemoteEditorUrl: state.openUrl,
 }));
@@ -89,6 +100,9 @@ vi.mock("../ui/menu", () => ({
     disabled?: boolean;
   }) => cloneElement(render, disabled === undefined ? {} : { disabled }, children),
   MenuPopup: "section",
+  MenuSub: "div",
+  MenuSubTrigger: "button",
+  MenuSubPopup: "section",
   MenuItem: "button",
   MenuItemLabel: "span",
   MenuShortcut: "span",
@@ -104,6 +118,7 @@ let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
   state.allowed.clear();
   state.remote = { mode: "local-exec" };
+  state.clientEditors = editors;
   state.run.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.openUrl.mockReset().mockResolvedValue(true);
   state.setPreferred.mockReset();
@@ -112,11 +127,21 @@ beforeEach(() => {
   state.listeners.clear();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("navigator", { platform: "Linux" });
+  const events = new EventTarget();
+  const storage = new Map<string, string>();
   vi.stubGlobal("window", {
-    addEventListener: (_type: string, callback: (event: KeyboardEvent) => void) => {
-      state.keydown = callback;
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
     },
-    removeEventListener: (_type: string, callback: (event: KeyboardEvent) => void) => {
+    dispatchEvent: (event: Event) => events.dispatchEvent(event),
+    addEventListener: (type: string, callback: EventListener) => {
+      events.addEventListener(type, callback);
+      if (type === "keydown") state.keydown = callback;
+    },
+    removeEventListener: (type: string, callback: EventListener) => {
+      events.removeEventListener(type, callback);
       if (state.keydown === callback) state.keydown = null;
     },
   });
@@ -128,20 +153,31 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function renderPicker(
-  pathKind: "file" | "folder" | null = "folder",
-  openInPath: string | null = "/work/project",
-) {
+async function renderPicker({
+  pathKind = "folder",
+  openInPath = "/work/project",
+  availableEditors = editors,
+  displayMode = "toolbar",
+  presentation = "toolbar",
+}: {
+  pathKind?: "file" | "folder" | null;
+  openInPath?: string | null;
+  availableEditors?: readonly EditorId[];
+  displayMode?: "toolbar" | "panel";
+  presentation?: "toolbar" | "menu";
+} = {}) {
   await act(async () => {
     for (const listener of state.listeners) listener();
     const node = (
       <OpenInPicker
         environmentId={selected}
         keybindings={DEFAULT_RESOLVED_KEYBINDINGS}
-        availableEditors={editors}
+        availableEditors={availableEditors}
         openInPath={openInPath}
         pathKind={pathKind}
-        compact
+        displayMode={displayMode}
+        presentation={presentation}
+        compact={displayMode === "toolbar"}
       />
     );
     if (renderer) renderer.update(node);
@@ -156,6 +192,71 @@ function primaryButton() {
 function keyboardEvent() {
   return { preventDefault: vi.fn() } as unknown as KeyboardEvent;
 }
+
+it.each([
+  ["local-exec", "panel"],
+  ["remote-links", "panel"],
+  ["local-exec", "toolbar"],
+  ["remote-links", "toolbar"],
+] as const)(
+  "selects the preferred editor without launching a %s workspace from the %s",
+  async (mode, displayMode) => {
+    state.allowed.add(selected);
+    state.clientEditors = ["cursor", "vscode"];
+    state.remote =
+      mode === "local-exec" ? { mode } : { mode, host: { kind: "ssh-alias", host: "test-host" } };
+    await renderPicker({ availableEditors: ["cursor", "vscode"], displayMode });
+    if (displayMode === "panel") {
+      expect(renderer!.root.findByProps({ "aria-label": "Open in Cursor" })).toBeDefined();
+    }
+    await act(async () => {
+      renderer!.root.findByProps({ children: "VS Code" }).parent!.props.onClick();
+    });
+    expect(window.localStorage.getItem("t3code:last-editor")).toBe('"vscode"');
+    const openButton =
+      displayMode === "panel"
+        ? renderer!.root.findByProps({ "aria-label": "Open in VS Code" })
+        : primaryButton();
+    expect(state.run).not.toHaveBeenCalled();
+    expect(state.openUrl).not.toHaveBeenCalled();
+
+    await act(async () => openButton.props.onClick());
+    if (mode === "local-exec") {
+      expect(state.run).toHaveBeenCalledExactlyOnceWith({
+        environmentId: selected,
+        input: { cwd: "/work/project", editor: "vscode" },
+      });
+    } else {
+      expect(state.openUrl).toHaveBeenCalledExactlyOnceWith(
+        "vscode://vscode-remote/ssh-remote+test-host/work/project/",
+      );
+    }
+  },
+);
+
+it.each(["local-exec", "remote-links"] as const)(
+  "still launches the selected file from a %s menu",
+  async (mode) => {
+    state.allowed.add(selected);
+    state.remote =
+      mode === "local-exec" ? { mode } : { mode, host: { kind: "ssh-alias", host: "test-host" } };
+    await renderPicker({ pathKind: "file", presentation: "menu" });
+    await act(async () => {
+      renderer!.root.findByProps({ children: "VS Code" }).parent!.props.onClick();
+    });
+    if (mode === "local-exec") {
+      expect(state.run).toHaveBeenCalledExactlyOnceWith({
+        environmentId: selected,
+        input: { cwd: "/work/project", editor: "vscode" },
+      });
+    } else {
+      expect(state.openUrl).toHaveBeenCalledExactlyOnceWith(
+        "vscode://vscode-remote/ssh-remote+test-host/work/project:1",
+      );
+    }
+    expect(window.localStorage.getItem("t3code:last-editor")).toBe('"vscode"');
+  },
+);
 
 describe("host editor access", () => {
   it("uses the selected grant for both the button and a retained shortcut", async () => {
@@ -207,7 +308,7 @@ describe("client editor links", () => {
     ["folder", "/"],
   ] as const)("opens an SSH %s URL without host operate permission", async (pathKind, suffix) => {
     state.remote = { mode: "remote-links", host: { kind: "ssh-alias", host: "test-host" } };
-    await renderPicker(pathKind);
+    await renderPicker({ pathKind });
     expect(primaryButton().props.disabled).toBe(false);
     await act(async () => primaryButton().props.onClick());
     expect(state.openUrl).toHaveBeenCalledExactlyOnceWith(
@@ -220,7 +321,7 @@ describe("client editor links", () => {
 
   it("blocks remote buttons and shortcuts until the preview path kind is known", async () => {
     state.remote = { mode: "remote-links", host: { kind: "ssh-alias", host: "test-host" } };
-    await renderPicker(null);
+    await renderPicker({ pathKind: null });
     expect(primaryButton().props.disabled).toBe(true);
     expect(renderer!.root.findByProps({ "aria-label": "Choose editor" }).props.disabled).toBe(true);
     expect(state.keydown).toBeNull();
@@ -232,7 +333,7 @@ describe("client editor links", () => {
     expect(state.openUrl).not.toHaveBeenCalled();
     expect(state.run).not.toHaveBeenCalled();
     expect(event.preventDefault).not.toHaveBeenCalled();
-    await renderPicker("file");
+    await renderPicker({ pathKind: "file" });
     const fileEvent = keyboardEvent();
     await act(async () => state.keydown!(fileEvent));
     expect(state.openUrl).toHaveBeenCalledExactlyOnceWith(
@@ -240,9 +341,9 @@ describe("client editor links", () => {
     );
     expect(fileEvent.preventDefault).toHaveBeenCalledOnce();
     state.openUrl.mockClear();
-    await renderPicker(null);
+    await renderPicker({ pathKind: null });
     expect(state.keydown).toBeNull();
-    await renderPicker("folder");
+    await renderPicker({ pathKind: "folder" });
     await act(async () => primaryButton().props.onClick());
     expect(state.openUrl).toHaveBeenCalledExactlyOnceWith(
       "vscode://vscode-remote/ssh-remote+test-host/work/project/",
@@ -251,7 +352,7 @@ describe("client editor links", () => {
 
   it("lets the host editor resolve a local path whose preview type is unknown", async () => {
     state.allowed.add(selected);
-    await renderPicker(null);
+    await renderPicker({ pathKind: null });
     expect(primaryButton().props.disabled).toBe(false);
     await act(async () => primaryButton().props.onClick());
     expect(state.run).toHaveBeenCalledExactlyOnceWith({
